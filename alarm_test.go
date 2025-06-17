@@ -1,4 +1,4 @@
-package alarm
+package wallclock
 
 import (
 	"context"
@@ -31,19 +31,25 @@ func requireMonoClockReading(t *testing.T, moment time.Time) {
 func requireSchedulerState(t *testing.T, alarmsCount int, jumpForwardMonLastMaxDelay time.Duration) {
 	t.Helper()
 	globalScheduler.mu.Lock()
-	require.Equal(t, alarmsCount, globalScheduler.heap.Len())
+	require.Equal(t, alarmsCount, globalScheduler.alarms.Len())
 	globalScheduler.mu.Unlock()
 	if alarmsCount > 0 {
 		require.EqualValues(t, 1, schedulerRunningLoops.Load())
-		require.EqualValues(t, jumpForwardMonLastMaxDelay, jumpForwardLastMonitoredMaxDelay.Load())
-		require.EqualValues(t, 1, jumpForwardMonitoringGoroutines.Load())
+		if jumpForwardMonLastMaxDelay > 0 {
+			require.EqualValues(t, 1, jumpForwardMonitoringGoroutines.Load())
+		} else {
+			require.EqualValues(t, 0, jumpForwardMonitoringGoroutines.Load())
+		}
 	} else {
 		require.EqualValues(t, 0, schedulerRunningLoops.Load())
+	}
+	if jumpForwardMonLastMaxDelay > 0 {
 		require.EqualValues(t, jumpForwardMonLastMaxDelay, jumpForwardLastMonitoredMaxDelay.Load())
 	}
 }
 
 func Test_NewAlarmWithNoAdjustments(t *testing.T) {
+	onTestStart(t)
 	allowedDelay := time.Millisecond * 500
 	allowedDelayOpt := WithAllowedDelay(allowedDelay)
 	now := time.Now()
@@ -60,7 +66,6 @@ func Test_NewAlarmWithNoAdjustments(t *testing.T) {
 
 	var firedAlarms []Alarm
 	addFiredAlarm := func(name string, a Alarm, firedAt time.Time, expFiredAt time.Time) {
-		t.Helper()
 		requireMonoClockReading(t, firedAt)
 		aImpl := a.(*alarm)
 		if name != "alarmInPast" {
@@ -70,7 +75,7 @@ func Test_NewAlarmWithNoAdjustments(t *testing.T) {
 				name, expFiredAt, aImpl.WallFireAt,
 			)
 		}
-		if firedAt.Before(expFiredAt) {
+		if firedAt.Add(time.Millisecond * 5).Before(expFiredAt) {
 			t.Errorf("%s fired too soon at %s, but expected to Fire at %s", name, firedAt, expFiredAt)
 		} else if firedAt.After(expFiredAt.Add(time.Millisecond * 100)) {
 			t.Errorf("%s fired too late at %s, but expected to Fire at %s", name, firedAt, expFiredAt)
@@ -134,6 +139,7 @@ func Test_NewAlarmWithNoAdjustments(t *testing.T) {
 }
 
 func TestNewAlarm_Stop(t *testing.T) {
+	onTestStart(t)
 	now := time.Now()
 	a := NewAlarm(now.Add(time.Hour))
 	requireSchedulerState(t, 1, DefaultAllowedDelay)
@@ -148,6 +154,7 @@ func TestNewAlarm_Stop(t *testing.T) {
 }
 
 func TestNewAlarm_ConcurrentCreationAndFire(t *testing.T) {
+	onTestStart(t)
 	allowedDelay := time.Millisecond * 500
 	allowedDelayOpt := WithAllowedDelay(allowedDelay)
 	alarmsCount := 1000
@@ -184,6 +191,7 @@ func TestNewAlarm_ConcurrentCreationAndFire(t *testing.T) {
 }
 
 func TestNewAlarm_ConcurrentStop(t *testing.T) {
+	onTestStart(t)
 	for i := 0; i < 5; i++ {
 		wg := &sync.WaitGroup{}
 		a := NewAlarm(time.Now().Add(time.Hour))
@@ -206,6 +214,7 @@ func TestNewAlarm_ConcurrentStop(t *testing.T) {
 }
 
 func TestNewAlarm_DoesNotFireAfterStop(t *testing.T) {
+	onTestStart(t)
 	// check if alarm puts a value to its channel after Stop()
 	alarmsCount := 1000
 	delay := 100 * time.Millisecond
@@ -231,7 +240,7 @@ func TestNewAlarm_DoesNotFireAfterStop(t *testing.T) {
 			case firedAt := <-alarm.C():
 				firedCount.Add(1)
 				requireMonoClockReading(t, firedAt)
-				checkTimeEqualsWithErr(t, "alarm"+strconv.Itoa(i), time.Now(), firedAt, time.Millisecond*200)
+				checkWallTimeEqualsWithErr(t, "alarm"+strconv.Itoa(i), time.Now(), firedAt, time.Millisecond*200)
 				if !isFirstFired.Swap(true) {
 					close(firstFired)
 					return
@@ -263,10 +272,14 @@ func TestNewAlarm_DoesNotFireAfterStop(t *testing.T) {
 		stoppedCount.Load(), notStoppedCount.Load(), firedCount.Load(),
 	)
 	require.EqualValues(t, alarmsCount, firedCount.Load()+stoppedCount.Load())
-
 }
 
-func checkTimeEqualsWithErr(t *testing.T, name string, expected, actual time.Time, maxError time.Duration) {
+func checkWallTimeEqualsWithErr(
+	t *testing.T,
+	name string,
+	expected, actual time.Time,
+	maxError time.Duration,
+) {
 	t.Helper()
 	actual = actual.Round(0)     // strip monotonic clock component
 	expected = expected.Round(0) // strip monotonic clock component
@@ -278,56 +291,175 @@ func checkTimeEqualsWithErr(t *testing.T, name string, expected, actual time.Tim
 	}
 }
 
-func TestFactory_NewAlarmWithManualAdjustmentToFuture(t *testing.T) {
-	// You need to manually adjust the system time to the future by 1 hour while it's running
-	// We expect alarm should fire sooner than internal timer was initially scheduled
-	t.Skip("manual adjustment test is skipped by default, comment to run it")
+func TestFactory_NewAlarmWithAdjustmentToFuture(t *testing.T) {
+	t.Run("expire all alarms at once", func(t *testing.T) {
+		onTestStart(t)
+		maxDelay := time.Millisecond * 40
+		maxDelayOpt := WithAllowedDelay(maxDelay)
+		now := time.Now()
+		baseTime := now.Add(time.Minute)
+		var alarms []Alarm
+		alarmsCount := 20
+		for i := 0; i < alarmsCount; i++ {
+			fireAt := baseTime.Add(time.Duration(i) * time.Second)
+			alarms = append(alarms, NewAlarm(fireAt, maxDelayOpt))
+		}
+		requireSchedulerState(t, alarmsCount, maxDelay)
+		alarmsDone := make(chan struct{})
+		go func() {
+			for i := 0; i < alarmsCount; i++ {
+				firedAt := <-alarms[i].C()
+				requireMonoClockReading(t, firedAt)
+				checkWallTimeEqualsWithErr(
+					t,
+					"alarm"+strconv.Itoa(i),
+					gotTime(time.Now()),
+					firedAt.Round(0),
+					100*time.Millisecond,
+				)
+			}
+			close(alarmsDone)
+		}()
+		time.Sleep(time.Millisecond)
+		setWallTimeIncrement(time.Hour)
+		time.Sleep(100 * time.Millisecond)
+		requireSchedulerState(t, 0, maxDelay)
+		require.Equal(t, firedAlarms, alarms)
+	})
 
-	maxDelay := time.Millisecond * 500
-	maxDelayOpt := WithAllowedDelay(maxDelay)
-	now := time.Now()
-	baseTime := now.Add(time.Minute)
-	var alarms []Alarm
-	alarmsCount := 20
-	for i := 0; i < alarmsCount; i++ {
-		fireAt := baseTime.Add(time.Duration(i) * time.Second)
-		alarms = append(alarms, NewAlarm(fireAt, maxDelayOpt))
-	}
-	requireSchedulerState(t, alarmsCount, maxDelay)
-	for i := 0; i < alarmsCount; i++ {
-		firedAt := <-alarms[i].C()
-		requireMonoClockReading(t, firedAt)
-		checkTimeEqualsWithErr(t, "alarm"+strconv.Itoa(i), time.Now(), firedAt.Round(0), 100*time.Millisecond)
-	}
-	requireSchedulerState(t, 0, maxDelay)
-	require.Equal(t, firedAlarms, alarms)
+	t.Run("jump to past and multiple jumps to future", func(t *testing.T) {
+		onTestStart(t)
+		maxDelay := time.Millisecond * 40
+		maxDelayOpt := WithAllowedDelay(maxDelay)
+		startFromNowDuration := time.Millisecond * 100
+		baseTime := time.Now().Add(startFromNowDuration)
+		var alarms []Alarm
+		alarmsCount := 5
+		alarmsStep := time.Minute
+		for i := 0; i < alarmsCount; i++ {
+			fireAt := baseTime.Add(time.Duration(i) * alarmsStep)
+			alarms = append(alarms, NewAlarm(fireAt, maxDelayOpt))
+		}
+		requireSchedulerState(t, alarmsCount, maxDelay)
+		alarmsDone := make(chan struct{})
+		go func() {
+			for i := 0; i < alarmsCount; i++ {
+				firedAt := <-alarms[i].C()
+				requireMonoClockReading(t, firedAt)
+				checkWallTimeEqualsWithErr(
+					t,
+					"alarm"+strconv.Itoa(i),
+					gotTime(time.Now()),
+					firedAt.Round(0),
+					100*time.Millisecond,
+				)
+			}
+			close(alarmsDone)
+		}()
+		time.Sleep(time.Millisecond)
+		setWallTimeIncrement(-time.Hour)
+		time.Sleep(startFromNowDuration * 5)
+		// first alarm should not have fired
+		requireSchedulerState(t, alarmsCount, maxDelay)
+		require.Empty(t, firedAlarms)
+
+		for i := 0; i < alarmsCount; i++ {
+			setWallTimeIncrement(time.Duration(i) * alarmsStep)
+			time.Sleep(maxDelay * 4)
+			requireSchedulerState(t, alarmsCount-i-1, maxDelay)
+			require.Equal(t, alarms[:i+1], firedAlarms)
+		}
+	})
+
+	t.Run("different allowed delays", func(t *testing.T) {
+		// alarm with smaller allowed delay that is scheduled to fire after alarms with larger allowed delay
+		onTestStart(t)
+		baseTimeFromStartDuration := time.Millisecond * 100
+		startTime := time.Now()
+		baseTime := startTime.Add(baseTimeFromStartDuration)
+
+		type alarmInfo struct {
+			fireAt       time.Time
+			allowedDelay time.Duration
+		}
+		alarmsInfo := []alarmInfo{
+			{fireAt: baseTime.Add(time.Millisecond * 100), allowedDelay: time.Minute},
+			{fireAt: baseTime.Add(time.Millisecond * 300), allowedDelay: time.Millisecond * 50},
+			{fireAt: baseTime.Add(time.Millisecond * 500), allowedDelay: time.Hour},
+			{fireAt: baseTime.Add(time.Millisecond * 700), allowedDelay: time.Millisecond * 60},
+		}
+		alarms := make([]Alarm, len(alarmsInfo))
+		for i, info := range alarmsInfo {
+			alarms[i] = NewAlarm(info.fireAt, WithAllowedDelay(info.allowedDelay))
+		}
+		time.Sleep(time.Millisecond)
+		// even though the soonest alarm is alarms[0], monitor should be more sensitive than its
+		// allowedDelay in order not to expire alarms[1]
+		requireSchedulerState(t, len(alarms), alarmsInfo[1].allowedDelay)
+		setWallTimeIncrement(alarmsInfo[1].allowedDelay)
+		for i := 0; i < len(alarmsInfo); i++ {
+			select {
+			case firedAt := <-alarms[0].C():
+				checkWallTimeEqualsWithErr(
+					t, "alarms[0]", alarmsInfo[0].fireAt, firedAt, time.Millisecond*20)
+				require.Equal(t, alarms[:1], firedAlarms)
+				requireSchedulerState(t, 3, alarmsInfo[1].allowedDelay)
+			case firedAt := <-alarms[1].C():
+				checkWallTimeEqualsWithErr(
+					t, "alarms[1]", alarmsInfo[1].fireAt, firedAt, time.Millisecond*20)
+				require.Equal(t, alarms[:2], firedAlarms)
+				time.Sleep(time.Millisecond)
+				requireSchedulerState(t, 2, alarmsInfo[3].allowedDelay)
+			case firedAt := <-alarms[2].C():
+				checkWallTimeEqualsWithErr(
+					t, "alarms[2]", alarmsInfo[2].fireAt, firedAt, time.Millisecond*20)
+				require.Equal(t, alarms[:3], firedAlarms)
+				requireSchedulerState(t, 1, alarmsInfo[3].allowedDelay)
+				// event though the soonest alarm is alarms[2], monitor should be more sensitive than its
+				// allowedDelay in order not to expire alarms[3]
+				incWallTimeIncrement(alarmsInfo[3].allowedDelay)
+				time.Sleep(time.Millisecond)
+			case firedAt := <-alarms[3].C():
+				checkWallTimeEqualsWithErr(
+					t, "alarms[3]", alarmsInfo[3].fireAt, firedAt, time.Millisecond*20)
+				require.Equal(t, alarms, firedAlarms)
+			}
+		}
+		requireSchedulerState(t, 0, alarmsInfo[3].allowedDelay)
+	})
 }
 
-func TestFactory_NewAlarmWithManualAdjustmentToPast(t *testing.T) {
-	// You need to manually adjust the system time to the past a bit while it's running
-	// We expect alarm should fire at the wall time it was scheduled, not sooner
-	t.Skip("manual adjustment test is skipped by default, comment to run it")
+func requireCloseDurations(t *testing.T, exp time.Duration, act time.Duration, maxError time.Duration) {
+	t.Helper()
+	if exp < act-maxError || exp > act+maxError {
+		t.Errorf("Expected duration %s is not close to actual duration %s with max error %s",
+			exp, act, maxError)
+	}
+}
 
+func TestFactory_NewAlarmWithAdjustmentToPast(t *testing.T) {
+	onTestStart(t)
 	now := time.Now()
-	fireA1At := now.Add(time.Second * 10)
-	fireA2At := now.Add(time.Second * 15)
+	a1InitDuration := time.Millisecond * 100
+	a2InitDuration := time.Millisecond * 150
+	fireA1At := now.Add(a1InitDuration)
+	fireA2At := now.Add(a2InitDuration)
 	a1 := NewAlarm(fireA1At)
-	t.Logf("a1 scheduled to fire at %s", fireA1At)
 	a2 := NewAlarm(fireA2At)
-	t.Logf("a2 scheduled to fire at %s", fireA2At)
 	requireSchedulerState(t, 2, DefaultAllowedDelay)
+	time.Sleep(time.Microsecond)
+	setWallTimeIncrement(-time.Millisecond * 100)
 	var fired []Alarm
 	for i := 0; i < 2; i++ {
 		select {
 		case firedAt := <-a1.C():
 			fired = append(fired, a1)
-			elapsed := time.Since(now)
-			t.Logf("a1 fired at %s (%v after start)", firedAt, elapsed)
-			checkTimeEqualsWithErr(t, "a1", fireA1At, firedAt.Round(0), time.Millisecond*100)
+			checkWallTimeEqualsWithErr(t, "a1", fireA1At, firedAt.Round(0), time.Millisecond*20)
+			requireCloseDurations(t, a1InitDuration-getWallTimeIncrement(), firedAt.Sub(now), time.Millisecond*20)
 		case firedAt := <-a2.C():
 			fired = append(fired, a2)
-			t.Logf("a2 fired at %s (%v  after start)", firedAt, time.Since(now))
-			checkTimeEqualsWithErr(t, "a2", fireA2At, firedAt.Round(0), time.Millisecond*100)
+			checkWallTimeEqualsWithErr(t, "a2", fireA2At, firedAt.Round(0), time.Millisecond*20)
+			requireCloseDurations(t, a2InitDuration-getWallTimeIncrement(), firedAt.Sub(now), time.Millisecond*20)
 		}
 	}
 	require.Equal(t, []Alarm{a1, a2}, fired)
@@ -335,7 +467,20 @@ func TestFactory_NewAlarmWithManualAdjustmentToPast(t *testing.T) {
 	requireSchedulerState(t, 0, DefaultAllowedDelay)
 }
 
+func TestNewAlarm_WithAnyDelay(t *testing.T) {
+	onTestStart(t)
+	startedAt := time.Now()
+	fireAt := startedAt.Add(time.Millisecond * 100)
+	a := NewAlarm(fireAt, WithAnyAllowedDelay())
+	time.Sleep(time.Millisecond * 50)
+	requireSchedulerState(t, 1, 0)
+	firedAt := <-a.C()
+	requireMonoClockReading(t, firedAt)
+	checkWallTimeEqualsWithErr(t, "a", fireAt, firedAt, time.Millisecond*50)
+}
+
 func BenchmarkAlarms(b *testing.B) {
+	onTestStart(b)
 	for i := 0; i < b.N; i++ {
 		alarmsCount := 1000
 		alarms := make([]Alarm, alarmsCount)
@@ -352,5 +497,13 @@ func BenchmarkAlarms(b *testing.B) {
 			}()
 		}
 		wg.Wait()
+	}
+}
+
+func onTestStart(t testing.TB) {
+	t.Cleanup(testCleanUp)
+	//goland:noinspection GoBoolExpressions
+	if !isTestingBuild {
+		t.Errorf("run go test with -tags=testing")
 	}
 }

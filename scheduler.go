@@ -1,4 +1,4 @@
-package alarm
+package wallclock
 
 import (
 	"sync"
@@ -7,7 +7,7 @@ import (
 
 type scheduler struct {
 	mu              sync.Mutex
-	heap            *indexedHeap[*alarm]
+	alarms          alarms
 	timer           *time.Timer
 	loopDoneSignal  chan struct{}
 	jumpForwardMon  jumpForwardMon
@@ -16,10 +16,7 @@ type scheduler struct {
 
 func newScheduler() *scheduler {
 	scheduler := &scheduler{
-		heap: newIndexedHeap[*alarm](func(x, y *alarm) bool {
-			// keep alarms that fire earlier at the top of the heap
-			return x.WallFireAt.Before(y.WallFireAt)
-		}),
+		alarms: newAlarms(),
 	}
 	scheduler.jumpForwardMon = jumpForwardMon{
 		OnJump: scheduler.onWcJumpForward,
@@ -33,15 +30,15 @@ func (s *scheduler) AddFutureAlarm(a *alarm, remainingDuration time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	isPushed, isTop, _ := s.heap.Push(a)
-	if !isPushed {
-		panic("alarm already exists in the scheduler")
-	}
-	if isTop {
-		s.scheduleAlarm(remainingDuration, a.AllowedDelay)
-		if s.heap.Len() == 1 {
+	isSoonestFireAt, isSoonestExpiresAt := s.alarms.Add(a)
+	if isSoonestFireAt {
+		s.setTimer(remainingDuration)
+		if s.alarms.Len() == 1 {
 			s.startLoop()
 		}
+	}
+	if isSoonestExpiresAt {
+		s.jumpForwardMon.Set(a.AllowedDelay)
 	}
 }
 
@@ -49,17 +46,24 @@ func (s *scheduler) RemoveAlarm(a *alarm) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	isDeleted, isTop := s.heap.Delete(a)
+	isDeleted, isSoonestFireAt, isSoonestExpiresAt := s.alarms.Delete(a)
 	if !isDeleted {
 		// it's ok: while we were waiting for the lock, the alarm was already fired and removed
 		return false
 	}
-	if s.heap.Len() == 0 {
+	if s.alarms.Len() == 0 {
 		s.stopLoop()
 		return true
 	}
-	if isTop {
-		s.tick(time.Now())
+	if isSoonestFireAt {
+		s.tick(gotTime(time.Now()))
+	}
+	if isSoonestExpiresAt {
+		if alarm := s.alarms.GetWithSoonestExpTime(); alarm != nil {
+			s.jumpForwardMon.Set(alarm.AllowedDelay)
+		} else if isTestingBuild {
+			panic("isSoonestExpiresAt is true, but there are no alarms left")
+		}
 	}
 	return true
 }
@@ -86,7 +90,7 @@ func (s *scheduler) runLoop(doneSignal chan struct{}) {
 			return
 		case firedAt := <-s.timer.C:
 			s.mu.Lock()
-			s.tick(firedAt)
+			s.tick(gotTime(firedAt))
 			s.mu.Unlock()
 		}
 	}
@@ -100,38 +104,44 @@ func (s *scheduler) onWcJumpForward() {
 	}
 	// wall clock was adjusted to the future:
 	// some alarms may turn out to be expired now or the timer need to be rescheduled to fire sooner
-	s.tick(time.Now())
+	s.tick(gotTime(time.Now()))
 }
 
 // thread-unsafe
-// tick pops alarms from the heap:
+// tick pops alarms from the alarmsByFireAtHeap:
 // - fires alarms that are already expired
 // - (re)schedules the timer to fire the alarm closest in the future and returns
 // - stops the loop if there are no alarms left
 func (s *scheduler) tick(now time.Time) {
-	for s.heap.Len() > 0 {
-		topAlarm := s.heap.Peek()
+	shouldResetJumpForwardMon := false
+	for s.alarms.Len() > 0 {
+		topAlarm := s.alarms.GetWithSoonestFireAt()
 		remainingDuration := topAlarm.WallFireAt.Sub(now)
 		if remainingDuration <= 0 {
 			// alarm is already expired (time jumped over the scheduled wall time), fire it immediately
-			topAlarm.c <- now
+			// remove topAlarm
+			if _, _, isSoonestExpTime := s.alarms.Delete(topAlarm); isSoonestExpTime {
+				shouldResetJumpForwardMon = true
+			}
 			if isTestingBuild {
 				firedAlarms = append(firedAlarms, topAlarm)
 			}
-			s.heap.Pop() // remove topAlarm
+			topAlarm.c <- now
 		} else {
-			s.scheduleAlarm(remainingDuration, topAlarm.AllowedDelay)
+			// is in the future, schedule it
+			s.setTimer(remainingDuration)
+			if shouldResetJumpForwardMon {
+				if withSoonestExpTime := s.alarms.GetWithSoonestExpTime(); withSoonestExpTime != nil {
+					s.jumpForwardMon.Set(withSoonestExpTime.AllowedDelay)
+				} else if isTestingBuild {
+					panic("shouldResetJumpForwardMon is true, but there are no alarms left")
+				}
+			}
 			return
 		}
 	}
-	// heap is empty
+	// alarms is empty
 	s.stopLoop()
-}
-
-// thread-unsafe
-func (s *scheduler) scheduleAlarm(remainingDuration time.Duration, maxDelay time.Duration) {
-	s.setTimer(remainingDuration)
-	s.jumpForwardMon.Set(maxDelay)
 }
 
 // thread-unsafe

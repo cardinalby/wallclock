@@ -1,4 +1,4 @@
-package alarm
+package indexed_heap
 
 import (
 	"testing"
@@ -21,7 +21,7 @@ func sliceDelete[S ~[]E, E comparable](sl S, value E) []E {
 
 func checkIndexIsCorrect[T comparable](
 	t *testing.T,
-	h *indexedHeap[T],
+	h *IndexedHeap[T],
 ) {
 	t.Helper()
 	require.Equal(t, len(h.data), len(h.indexesLookupMap))
@@ -34,12 +34,12 @@ func checkIndexIsCorrect[T comparable](
 
 func checkPush[T comparable](
 	t *testing.T,
-	h *indexedHeap[T],
+	h *IndexedHeap[T],
 	value T,
 ) {
 	t.Helper()
 	oldLen := h.Len()
-	isPushed, isTop, _ := h.Push(value)
+	isPushed, isTop := h.Push(value)
 	require.True(t, isPushed)
 	if isTop {
 		require.Equal(t, value, h.Peek())
@@ -56,7 +56,7 @@ func checkPush[T comparable](
 
 func checkDelete[T comparable](
 	t *testing.T,
-	h *indexedHeap[T],
+	h *IndexedHeap[T],
 	value T,
 ) {
 	t.Helper()
@@ -81,18 +81,16 @@ func checkDelete[T comparable](
 
 func checkPushRes[T comparable](
 	t *testing.T,
-	h *indexedHeap[T],
+	h *IndexedHeap[T],
 	value T,
 	expectedIsPushed bool,
 	expectedIsTop bool,
-	expectedReplacedTop T,
 ) {
 	t.Helper()
 	oldLen := h.Len()
-	isPushed, isTop, replacedTop := h.Push(value)
+	isPushed, isTop := h.Push(value)
 	require.Equal(t, expectedIsPushed, isPushed)
 	require.Equal(t, expectedIsTop, isTop)
-	require.Equal(t, expectedReplacedTop, replacedTop)
 	if expectedIsPushed {
 		require.Equal(t, oldLen+1, h.Len())
 	} else {
@@ -112,7 +110,7 @@ func checkPushRes[T comparable](
 
 func checkPeekRes[T comparable](
 	t *testing.T,
-	h *indexedHeap[T],
+	h *IndexedHeap[T],
 	expectedTop T,
 ) {
 	t.Helper()
@@ -122,7 +120,7 @@ func checkPeekRes[T comparable](
 
 func checkPopRes(
 	t *testing.T,
-	h *indexedHeap[string],
+	h *IndexedHeap[string],
 	expectedValue string,
 ) {
 	t.Helper()
@@ -133,8 +131,8 @@ func checkPopRes(
 	checkIndexIsCorrect(t, h)
 }
 
-func toOrderedSlice[T comparable](h *indexedHeap[T]) []T {
-	hClone := &indexedHeap[T]{
+func toOrderedSlice[T comparable](h *IndexedHeap[T]) []T {
+	hClone := &IndexedHeap[T]{
 		less:             h.less,
 		data:             append([]T(nil), h.data...),
 		indexesLookupMap: make(map[T]int, len(h.indexesLookupMap)),
@@ -178,18 +176,18 @@ func slicePermutations[T any](sl []T) [][]T {
 }
 
 func TestNewIndexedHeap(t *testing.T) {
-	h := newIndexedHeap[string](func(a, b string) bool { return len(a) > len(b) }) // max heap
+	h := NewIndexedHeap[string](func(a, b string) bool { return len(a) > len(b) }) // max heap
 	require.Equal(t, 0, h.Len())
-	checkPushRes(t, h, "1", true, true, "")
-	checkPushRes(t, h, "22", true, true, "1")
-	checkPushRes(t, h, "4444", true, true, "22")
-	checkPushRes(t, h, "88888888", true, true, "4444")
-	checkPushRes(t, h, "", true, false, "")
-	checkPushRes(t, h, "55555", true, false, "")
-	checkPushRes(t, h, "1", false, false, "")
-	checkPushRes(t, h, "7777777", true, false, "")
-	checkPushRes(t, h, "999999999", true, true, "88888888")
-	checkPushRes(t, h, "333", true, false, "")
+	checkPushRes(t, h, "1", true, true)
+	checkPushRes(t, h, "22", true, true)
+	checkPushRes(t, h, "4444", true, true)
+	checkPushRes(t, h, "88888888", true, true)
+	checkPushRes(t, h, "", true, false)
+	checkPushRes(t, h, "55555", true, false)
+	checkPushRes(t, h, "1", false, false)
+	checkPushRes(t, h, "7777777", true, false)
+	checkPushRes(t, h, "999999999", true, true)
+	checkPushRes(t, h, "333", true, false)
 
 	isDeleted, isTop := h.Delete("x")
 	require.False(t, isDeleted)
@@ -227,7 +225,7 @@ func TestIndexedHeap_Delete(t *testing.T) {
 	}
 	for i := 0; i < len(pushOrder); i++ {
 		for j := 0; j < len(deleteOrder); j++ {
-			h := newIndexedHeap[int](func(a, b int) bool { return a < b })
+			h := NewIndexedHeap[int](func(a, b int) bool { return a < b })
 			for _, v := range pushOrder[i] {
 				checkPush(t, h, v)
 			}
@@ -247,7 +245,7 @@ func TestIndexedHeap_DeleteLong(t *testing.T) {
 	permutations := slicePermutations(nums)
 	for _, pushOrder := range permutations {
 		for _, deleteOrder := range permutations {
-			h := newIndexedHeap[int](func(a, b int) bool { return a < b })
+			h := NewIndexedHeap[int](func(a, b int) bool { return a < b })
 			for _, v := range pushOrder {
 				checkPush(t, h, v)
 			}

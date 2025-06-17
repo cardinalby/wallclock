@@ -1,6 +1,6 @@
-module github.com/cardinalby/go_alarm
+module github.com/cardinalby/wallclock
 
-go 1.24.3
+go 1.22
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

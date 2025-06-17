@@ -1,4 +1,4 @@
-package alarm
+package wallclock
 
 import (
 	"fmt"
@@ -10,15 +10,19 @@ import (
 
 func collectAdjustments(
 	t *testing.T,
-	collectingDuration time.Duration,
+	stop chan struct{},
 	maxDelay time.Duration,
+	onMonStarted func(),
 ) (adjCount int) {
 	t.Helper()
 	mon := &jumpForwardMon{OnJump: func() {
 		adjCount++
 	}}
 	mon.Set(maxDelay)
-	<-time.After(collectingDuration)
+	if onMonStarted != nil {
+		onMonStarted()
+	}
+	<-stop
 	mon.Stop()
 	time.Sleep(time.Millisecond)
 	require.Equal(t, jumpForwardMonitoringGoroutines.Load(), int64(0))
@@ -27,18 +31,27 @@ func collectAdjustments(
 
 func testAdjustmentsCount(
 	t *testing.T,
-	testDuration time.Duration,
 	expectedAdjustments int,
+	onMonStarted func(maxDelay time.Duration),
 ) {
 	t.Helper()
 	maxDelays := []time.Duration{
+		50 * time.Millisecond,
 		100 * time.Millisecond,
-		time.Second,
 	}
 	for _, maxDelay := range maxDelays {
 		t.Run(fmt.Sprintf("%s maxDelay", maxDelay), func(t *testing.T) {
-			t.Parallel()
-			adjustments := collectAdjustments(t, testDuration, maxDelay)
+			onTestStart(t)
+			stop := make(chan struct{})
+			onMonStartedCallback := func() {
+				go func() {
+					if onMonStarted != nil {
+						onMonStarted(maxDelay)
+					}
+					close(stop)
+				}()
+			}
+			adjustments := collectAdjustments(t, stop, maxDelay, onMonStartedCallback)
 			if adjustments != expectedAdjustments {
 				t.Errorf("expected %d adjustments, but got %d", expectedAdjustments, adjustments)
 			}
@@ -46,16 +59,53 @@ func testAdjustmentsCount(
 	}
 }
 
-func TestMonitorWallClockJumpForward(t *testing.T) {
-	t.Parallel()
-
+func TestJumpForwardMon(t *testing.T) {
 	t.Run("no adjustments", func(t *testing.T) {
-		testAdjustmentsCount(t, 3*time.Second, 0)
+		testAdjustmentsCount(t, 0, nil)
 	})
 
-	t.Run("manual adjustment", func(t *testing.T) {
-		// You need to manually adjust the system time to the future while it's running
-		t.Skip("manual adjustment test is skipped by default, comment to run it")
-		testAdjustmentsCount(t, 15*time.Second, 1)
+	t.Run("has adjustment", func(t *testing.T) {
+		testAdjustmentsCount(t, 1, func(maxDelay time.Duration) {
+			time.Sleep(maxDelay + time.Millisecond)
+			setWallTimeIncrement(maxDelay + 1)
+			time.Sleep(maxDelay + time.Millisecond)
+		})
 	})
+
+	t.Run("has 2 adjustments", func(t *testing.T) {
+		testAdjustmentsCount(t, 2, func(maxDelay time.Duration) {
+			time.Sleep(maxDelay + time.Millisecond*50)
+			incWallTimeIncrement(maxDelay + 1)
+			time.Sleep(maxDelay + time.Millisecond*50)
+			incWallTimeIncrement(maxDelay + 1)
+			time.Sleep(maxDelay + time.Millisecond*50)
+		})
+	})
+
+	t.Run("has adjustment to future and past", func(t *testing.T) {
+		testAdjustmentsCount(t, 1, func(maxDelay time.Duration) {
+			time.Sleep(maxDelay + time.Millisecond*50)
+			setWallTimeIncrement(-maxDelay * 100)
+			time.Sleep(maxDelay + time.Millisecond*50)
+			incWallTimeIncrement(maxDelay + 1)
+			time.Sleep(maxDelay + time.Millisecond*50)
+		})
+	})
+
+	t.Run("has multiple small adjustments to future", func(t *testing.T) {
+		testAdjustmentsCount(t, 3, func(maxDelay time.Duration) {
+			time.Sleep(maxDelay + time.Millisecond*50)
+			incWallTimeIncrement(maxDelay/3 + 1)
+			time.Sleep(maxDelay + time.Millisecond*50)
+			incWallTimeIncrement(maxDelay/3 + 1)
+			time.Sleep(maxDelay + time.Millisecond*50)
+			incWallTimeIncrement(maxDelay/3 + 1)
+			time.Sleep(maxDelay + time.Millisecond*50)
+		})
+	})
+}
+
+func TestWithAnyAllowedDelay(t *testing.T) {
+	fireAt, _ := time.Parse(time.RFC3339, "2026-01-01T09:00:00Z")
+	t.Logf("fireAt: %s", fireAt)
 }

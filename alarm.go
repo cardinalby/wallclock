@@ -1,4 +1,4 @@
-package alarm
+package wallclock
 
 import (
 	"time"
@@ -24,16 +24,13 @@ func NewAlarm(fireAt time.Time, options ...Option) Alarm {
 	for _, opt := range options {
 		opt(props)
 	}
-	if props.allowedDelay < MinAllowedDelay {
-		props.allowedDelay = MinAllowedDelay
-	}
-
+	wallFireAt := fireAt.Round(0) // strip monotonic clock component
 	alarm := &alarm{
-		WallFireAt:   fireAt.Round(0), // strip monotonic clock component
+		WallFireAt:   wallFireAt, // strip monotonic clock component
 		AllowedDelay: props.allowedDelay,
 		c:            make(chan time.Time, 1),
 	}
-	now := time.Now()
+	now := gotTime(time.Now())
 	remainingDuration := alarm.WallFireAt.Sub(now)
 	if remainingDuration <= 0 {
 		alarm.c <- now
@@ -44,7 +41,8 @@ func NewAlarm(fireAt time.Time, options ...Option) Alarm {
 }
 
 type alarm struct {
-	WallFireAt   time.Time
+	WallFireAt time.Time
+	// zero value means that wall clock jumps forward are not monitored
 	AllowedDelay time.Duration
 	c            chan time.Time
 }
@@ -55,4 +53,8 @@ func (a *alarm) C() <-chan time.Time {
 
 func (a *alarm) Stop() bool {
 	return globalScheduler.RemoveAlarm(a)
+}
+
+func (a *alarm) wallExpiresAt() time.Time {
+	return a.WallFireAt.Add(a.AllowedDelay)
 }

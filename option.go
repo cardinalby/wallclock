@@ -1,4 +1,4 @@
-package alarm
+package wallclock
 
 import "time"
 
@@ -21,8 +21,20 @@ const MinAllowedDelay = time.Millisecond * 2
 // The lib takes care of wall clock adjustments only.
 // In the current implementation, the smaller the allowedDelay, the more often the wall clock adjustments are
 // checked, which may lead to higher CPU usage
+// It's limited by MinAllowedDelay
 func WithAllowedDelay(allowedDelay time.Duration) Option {
+	if allowedDelay < MinAllowedDelay {
+		allowedDelay = MinAllowedDelay
+	}
 	return func(props *props) {
 		props.allowedDelay = allowedDelay
+	}
+}
+
+// WithAnyAllowedDelay disables wall clock jump forward monitoring for the alarm. Jumps to the past will
+// still be handled.
+func WithAnyAllowedDelay() Option {
+	return func(props *props) {
+		props.allowedDelay = 0
 	}
 }

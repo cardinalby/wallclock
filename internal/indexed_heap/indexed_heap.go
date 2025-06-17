@@ -1,16 +1,18 @@
-package alarm
+package indexed_heap
 
-// indexedHeap is a heap implementation that stores unique non-zero elements and
+// IndexedHeap is a heap implementation that stores unique non-zero elements and
 // maintains a lookup map for indexes of elements thanks to which it can
 // delete elements in O(log n) time.
-type indexedHeap[T comparable] struct {
+type IndexedHeap[T comparable] struct {
 	less             func(x, y T) bool
 	data             []T
 	indexesLookupMap map[T]int
 }
 
-func newIndexedHeap[T comparable](less func(x, y T) bool) *indexedHeap[T] {
-	return &indexedHeap[T]{
+func NewIndexedHeap[T comparable](
+	less func(x, y T) bool,
+) *IndexedHeap[T] {
+	return &IndexedHeap[T]{
 		less:             less,
 		indexesLookupMap: make(map[T]int),
 	}
@@ -22,32 +24,25 @@ func newIndexedHeap[T comparable](less func(x, y T) bool) *indexedHeap[T] {
 //   - isTop: true if element was pushed to the top of the heap, false otherwise
 //   - replacedTop: the previous top element, or zero value of T if heap was empty or
 //     the pushed element was not added to the top
-func (h *indexedHeap[T]) Push(x T) (
+func (h *IndexedHeap[T]) Push(x T) (
 	isPushed bool,
 	isTop bool,
-	replacedTop T,
 ) {
 	if _, ok := h.indexesLookupMap[x]; ok {
-		return false, false, replacedTop
+		return false, false
 	}
 	dataLen := len(h.data)
-	var oldTop T
-	if dataLen > 0 {
-		oldTop = h.data[0]
-	}
 	h.data = append(h.data, x)
-	if isTop = h.up(dataLen); isTop {
-		replacedTop = oldTop
-	}
-	return true, isTop, replacedTop
+	isTop = h.up(dataLen)
+	return true, isTop
 }
 
-func (h *indexedHeap[T]) Len() int {
+func (h *IndexedHeap[T]) Len() int {
 	return len(h.data)
 }
 
 // Peek returns top element without deleting. If heap is empty, it returns zero value of T.
-func (h *indexedHeap[T]) Peek() (top T) {
+func (h *IndexedHeap[T]) Peek() (top T) {
 	if len(h.data) == 0 {
 		return top
 	}
@@ -55,7 +50,7 @@ func (h *indexedHeap[T]) Peek() (top T) {
 }
 
 // Pop returns top element removing it from the heap
-func (h *indexedHeap[T]) Pop() (top T) {
+func (h *IndexedHeap[T]) Pop() (top T) {
 	n := len(h.data) - 1
 	if n >= 0 {
 		h.swap(0, n)
@@ -69,7 +64,7 @@ func (h *indexedHeap[T]) Pop() (top T) {
 }
 
 // Delete deletes one element that satisfies predicate from the heap.
-func (h *indexedHeap[T]) Delete(value T) (isDeleted bool, isTop bool) {
+func (h *IndexedHeap[T]) Delete(value T) (isDeleted bool, isTop bool) {
 	index, ok := h.indexesLookupMap[value]
 	if !ok {
 		return false, false
@@ -89,14 +84,14 @@ func (h *indexedHeap[T]) Delete(value T) (isDeleted bool, isTop bool) {
 	return true, index == 0
 }
 
-func (h *indexedHeap[T]) swap(i, j int) {
+func (h *IndexedHeap[T]) swap(i, j int) {
 	h.data[i], h.data[j] = h.data[j], h.data[i]
 }
 
 // up restores the heap property by moving the element at index j upwards.
 // It returns true if the element was popped to the top (index 0).
 // it updates the indexesLookupMap for the moved element and its ex-parent.
-func (h *indexedHeap[T]) up(j int) (isPoppedToTheTop bool) {
+func (h *IndexedHeap[T]) up(j int) (isPoppedToTheTop bool) {
 	for {
 		i := (j - 1) / 2 // parent
 		if i == j || !h.less(h.data[j], h.data[i]) {
@@ -114,7 +109,7 @@ func (h *indexedHeap[T]) up(j int) (isPoppedToTheTop bool) {
 // down restores the heap property by moving the element at index i0 downwards.
 // It returns true if the element was moved.
 // it updates the indexesLookupMap for the moved element and its ex-children.
-func (h *indexedHeap[T]) down(i0, n int) bool {
+func (h *IndexedHeap[T]) down(i0, n int) bool {
 	i := i0
 	for {
 		j1 := 2*i + 1
