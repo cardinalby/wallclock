@@ -11,7 +11,8 @@
 A Go library that provides **wall-clock** aware **alarms** that fire at specific wall times, 
 handling system clock adjustments gracefully. 
 
-Use it instead of `time.NewTimer` if you need to schedule an event at a specific time.
+Use it instead of `time.NewTimer` if you need to schedule an event at a **specific time** rather
+than after some **duration**.
 
 ### Quick Example
 
@@ -21,17 +22,16 @@ go get github.com/cardinalby/wallclock
 ```go
 import "github.com/cardinalby/wallclock"
 
-now := time.Now()               // 2025-06-17 12:00:00
-fireAt := now.Add(time.Hour)    // 2025-06-17 13:00:00
+fireAt, _ := time.Parse(time.RFC3339, "2026-01-01T09:00:00Z")
 alarm := wallclock.NewAlarm(fireAt)
-firedAt := <-alarm.C() // fires at 2025-06-17 13:00:00
+firedAt := <-alarm.C()     // fires at 2026-01-01 09:00:00 (can be max 1 sec late) 
 ```
 
 ### Why not a simple Timer?
 
-Timers are set to fire after a duration, but they don't account for changes in the system clock.
-- It can fire **before** the expected time if the clock jumps **forward**.
-- It can fire **after** the expected time if the clock jumps **backward**.
+Timers are set to fire after a **duration**, but they don't account for changes in the system clock.
+- If the clock jumps **forward**, timer fires too **early** 
+- If the clock jumps **backward**, timer fires too **late**
 
 ### Implementation Details
 
