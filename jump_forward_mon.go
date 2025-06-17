@@ -4,17 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cardinalby/wallclock/internal/wall_clock"
+	"github.com/cardinalby/wallclock/internal/timekit"
 )
-
-// Go uses 2 separate syscalls to get wall and monotonic clocks,
-// so some small difference between them is expected from call to call. According to tests, it's normally
-// from nanoseconds to 10 microseconds depending on OS and CPU. I assume the difference more than 1 millisecond
-// unlikely to happen, and if it does, it should be considered a wall clock jump.
-//
-// Given that MinAllowedDelay is 2 ms, we can use the fixed 1ms threshold and compute the check interval
-// based on the maxAlarmDelay
-const wallAndMonoClocksDiffThreshold = 1 * time.Millisecond
 
 type jumpForwardMon struct {
 	OnJump        func()
@@ -62,7 +53,7 @@ func (m *jumpForwardMon) run(
 	// If we use fixed threshold, we can compute the check interval to satisfy the condition above.
 	// Another approach would be just take both threshold and check_interval as maxAlarmDelay / 2, but it would
 	// lead to more frequent checks and higher CPU usage.
-	checkInterval := maxAlarmDelay - wallAndMonoClocksDiffThreshold
+	checkInterval := maxAlarmDelay - timekit.WallAndMonoClocksDiffThreshold
 	if checkInterval <= 0 {
 		// should not happen because of MinAllowedDelay
 		checkInterval = time.Millisecond
@@ -72,15 +63,15 @@ func (m *jumpForwardMon) run(
 	}
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
-	startDiff := wall_clock.GetWallAndMonoClocksDiff(gotTime(time.Now()))
+	startDiff := timekit.GetWallAndMonoClocksDiff(gotTime(time.Now()))
 
 	for {
 		select {
 		case <-done:
 			return
 		case firedAt := <-ticker.C:
-			wallMonoDiff := wall_clock.GetWallAndMonoClocksDiff(gotTime(firedAt))
-			if wallMonoDiff >= startDiff+wallAndMonoClocksDiffThreshold {
+			wallMonoDiff := timekit.GetWallAndMonoClocksDiff(gotTime(firedAt))
+			if wallMonoDiff >= startDiff+timekit.WallAndMonoClocksDiffThreshold {
 				m.OnJump()
 				// take wallMonoDiff as a new startDiff to detect next jump
 				startDiff = wallMonoDiff

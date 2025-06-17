@@ -1,4 +1,4 @@
-package wall_clock
+package timekit
 
 import (
 	"time"
@@ -19,13 +19,6 @@ const (
 	year1885Offset = (1885 - 1) * 365.25 * 24 * 3600 // Approximate seconds from year 1 to 1885
 )
 
-var initTime = time.Now()
-
-// GetWallAndMonoClocksDiff says how much wall clock is ahead of the monotonic clock (relative to initTime).
-func GetWallAndMonoClocksDiff(t time.Time) time.Duration {
-	return t.Round(0).Sub(initTime) - t.Sub(initTime)
-}
-
 // timeStruct mirrors the internal structure of time.Time
 type timeStruct struct {
 	wall uint64
@@ -33,9 +26,9 @@ type timeStruct struct {
 	loc  *time.Location
 }
 
-// IncrementBy increments the wall clock time by the given duration
+// IncrementWallReadingBy increments the wall clock time by the given duration
 // while preserving the monotonic clock reading
-func IncrementBy(t time.Time, d time.Duration) time.Time {
+func IncrementWallReadingBy(t time.Time, d time.Duration) time.Time {
 	if d == 0 {
 		return t
 	}

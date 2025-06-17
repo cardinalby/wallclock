@@ -1,7 +1,6 @@
-package wall_clock
+package timekit
 
 import (
-	"math"
 	"testing"
 	"time"
 
@@ -36,7 +35,7 @@ func TestIncrementBy(t *testing.T) {
 				t.Parallel()
 				startTime := time.Now()
 				startDiff := GetWallAndMonoClocksDiff(startTime)
-				result := IncrementBy(startTime, tt.inc)
+				result := IncrementWallReadingBy(startTime, tt.inc)
 				require.Equal(t, result.Location(), startTime.Location())
 				resultDiff := GetWallAndMonoClocksDiff(result)
 				require.Equal(t, startDiff+tt.inc, resultDiff)
@@ -48,28 +47,7 @@ func TestIncrementBy(t *testing.T) {
 
 	t.Run("with no monotonic clock", func(t *testing.T) {
 		moment := time.Now().Round(0)
-		result := IncrementBy(moment, time.Second+time.Nanosecond)
+		result := IncrementWallReadingBy(moment, time.Second+time.Nanosecond)
 		require.Equal(t, result, moment.Add(time.Second+time.Nanosecond))
 	})
-}
-
-func TestGetWallAndMonoClocksDiff(t *testing.T) {
-	minDiff := time.Duration(math.MaxInt64)
-	maxDiff := time.Duration(0)
-	diffSum := time.Duration(0)
-	measurements := 1000
-
-	for i := 0; i < measurements; i++ {
-		time.Sleep(time.Millisecond)
-		diff := GetWallAndMonoClocksDiff(time.Now())
-		if diff < minDiff {
-			minDiff = diff
-		}
-		if diff > maxDiff {
-			maxDiff = diff
-		}
-		diffSum += diff
-	}
-	avgDiff := diffSum / time.Duration(measurements)
-	t.Logf("Min %v, Max %v, Avg %v", minDiff, maxDiff, avgDiff)
 }

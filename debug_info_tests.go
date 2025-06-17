@@ -5,13 +5,13 @@ package wallclock
 import (
 	"time"
 
-	"github.com/cardinalby/wallclock/internal/wall_clock"
+	"github.com/cardinalby/wallclock/internal/timekit"
 )
 
 const isTestingBuild = true
 
 func gotTime(t time.Time) time.Time {
-	return wall_clock.IncrementBy(t, getWallTimeIncrement())
+	return timekit.IncrementWallReadingBy(t, getWallTimeIncrement())
 }
 
 func testCleanUp() {
