@@ -4,7 +4,9 @@
 
 # Golang wall-clock alarm
 
-<img src="logo.png" alt="wallclock logo" width="200" style="display: block; margin: 0 auto;">
+<p align="center">
+   <img src="logo.png" alt="wallclock logo" width="200">
+</p>
 
 A Go library that provides **wall-clock** aware **alarms** that fire at specific wall times, 
 handling system clock adjustments gracefully. 
